@@ -1360,11 +1360,37 @@ int pospopcnt_u16_avx2_csa(const uint16_t* array, uint32_t len, uint32_t* flags)
             v16 = _mm256_srli_epi16(v16, 1);
         }
         
-        for (size_t i = 0; i < 16; i++) {
-            _mm256_storeu_si256((__m256i*)buffer, counter[i]);
-            for (size_t z = 0; z < 16; z++) {
-                flags[i] += 16 * (uint32_t)buffer[z];
-            }
+        for (size_t i = 0; i < 16; i+=2) {
+            __m512i shuffle_lo = _mm512_setr_epi32(0x06040200, 0x0e0c0a08, 0x16141210, 0x1e1c1a18,
+                                                   0x26242220, 0x2e2c2a28, 0x36343230, 0x3e3c3a38,
+                                                   0x46444240, 0x4e4c4a48, 0x56545250, 0x5e5c5a58,
+                                                   0x66646260, 0x6e6c6a68, 0x76747270, 0x7e7c7a78);
+            __m512i shuffle_hi = _mm512_setr_epi32(0x07050301, 0x0f0d0b09, 0x17151311, 0x1f1d1b19,
+                                                   0x27252321, 0x2f2d2b29, 0x37353331, 0x3f3d3b39,
+                                                   0x47454341, 0x4f4d4b49, 0x57555351, 0x5f5d5b59,
+                                                   0x67656361, 0x6f6d6b69, 0x77757371, 0x7f7d7b79);
+            // Move **lower bytes** from 16-bit counters, so bytes 0..31 of
+            // results are from counter[i] and 32..63 from counter[i+1]
+            __m512i lo_bytes = _mm512_permutex2var_epi8(counter[i], shuffle_lo, counter[i + 1]);
+
+            // Likewise, move **higher bytes**
+            __m512i hi_bytes = _mm512_permutex2var_epi8(counter[i], shuffle_hi, counter[i + 1]);
+
+            // Sum the lower bytes: now each 64-bit word holds sum of 8 bytes
+            __m512i sum_lo = _mm512_sad_epu8(lo_bytes, _mm512_setzero_si512());
+
+            // Likewise sum the higher bytes
+            __m512i sum_hi = _mm512_sad_epu8(hi_bytes, _mm512_setzero_si512());
+
+            // Calculate final sums --- the sum of higher bytes has to be multiplied by 256
+            __m512i sum = _mm512_add_epi64(sum_lo, _mm512_slli_epi64(sum_hi, 8));
+
+            // Since _mm512_extractXXX are slow, we use a buffer, which is likely cached
+            uint64_t buf64[8];
+            _mm512_storeu_si512((__m512i*)buf64, _mm512_slli_epi32(sum, 4));
+
+            flags[i + 0] += buf64[0] + buf64[1] + buf64[2] + buf64[3];
+            flags[i + 1] += buf64[4] + buf64[5] + buf64[6] + buf64[7];
         }
     }
 
