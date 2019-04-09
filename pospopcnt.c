@@ -2541,6 +2541,8 @@ int pospopcnt_u16_avx512bw_csa(const uint16_t* array, uint32_t len, uint32_t* fl
 
     uint16_t buffer[32];
 
+    __m512i flagsv = _mm512_setzero_si512();
+
     uint64_t i = 0;
     while (i < limit) {
         __m512i counter[16];
@@ -2595,14 +2597,69 @@ int pospopcnt_u16_avx512bw_csa(const uint16_t* array, uint32_t len, uint32_t* fl
             counter[i] = _mm512_add_epi16(counter[i], _mm512_and_si512(v16, _mm512_set1_epi16(1)));
             v16 = _mm512_srli_epi16(v16, 1);
         }
-        
+#if 0
         for (size_t i = 0; i < 16; i++) {
             _mm512_storeu_si512((__m512i*)buffer, counter[i]);
             for (size_t z = 0; z < 32; z++) {
                 flags[i] += 16 * (uint32_t)buffer[z];
             }
         }
+#else
+#define HADD_UINT16(x)                                          \
+        _mm512_add_epi32(                                       \
+            _mm512_srli_epi32(x, 16),                           \
+            _mm512_and_epi32(x, _mm512_set1_epi32(0xffff)))
+    
+        counter[0x0] = HADD_UINT16(counter[0x0]);
+        counter[0x1] = HADD_UINT16(counter[0x1]);
+        counter[0x2] = HADD_UINT16(counter[0x2]);
+        counter[0x3] = HADD_UINT16(counter[0x3]);
+        counter[0x4] = HADD_UINT16(counter[0x4]);
+        counter[0x5] = HADD_UINT16(counter[0x5]);
+        counter[0x6] = HADD_UINT16(counter[0x6]);
+        counter[0x7] = HADD_UINT16(counter[0x7]);
+        counter[0x8] = HADD_UINT16(counter[0x8]);
+        counter[0x9] = HADD_UINT16(counter[0x9]);
+        counter[0xA] = HADD_UINT16(counter[0xA]);
+        counter[0xB] = HADD_UINT16(counter[0xB]);
+        counter[0xC] = HADD_UINT16(counter[0xC]);
+        counter[0xD] = HADD_UINT16(counter[0xD]);
+        counter[0xE] = HADD_UINT16(counter[0xE]);
+        counter[0xF] = HADD_UINT16(counter[0xF]);
+
+#define SHUFFLE_LO(a, b) \
+    _mm512_permutex2var_epi32(a, _mm512_setr_epi32(0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30), b)
+
+#define SHUFFLE_HI(a, b) \
+    _mm512_permutex2var_epi32(a, _mm512_setr_epi32(1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31), b)
+
+#define REDUCE_UINT32(a, b) \
+    _mm512_add_epi32(SHUFFLE_LO(a, b), SHUFFLE_HI(a, b))
+    
+        counter[0x0] = REDUCE_UINT32(counter[0x0], counter[0x1]);
+        counter[0x1] = REDUCE_UINT32(counter[0x2], counter[0x3]);
+        counter[0x2] = REDUCE_UINT32(counter[0x4], counter[0x5]);
+        counter[0x3] = REDUCE_UINT32(counter[0x6], counter[0x7]);
+        counter[0x4] = REDUCE_UINT32(counter[0x8], counter[0x9]);
+        counter[0x5] = REDUCE_UINT32(counter[0xA], counter[0xB]);
+        counter[0x6] = REDUCE_UINT32(counter[0xC], counter[0xD]);
+        counter[0x7] = REDUCE_UINT32(counter[0xE], counter[0xF]);
+        
+        counter[0x0] = REDUCE_UINT32(counter[0x0], counter[0x1]);
+        counter[0x1] = REDUCE_UINT32(counter[0x2], counter[0x3]);
+        counter[0x2] = REDUCE_UINT32(counter[0x4], counter[0x5]);
+        counter[0x3] = REDUCE_UINT32(counter[0x6], counter[0x7]);
+        
+        counter[0x0] = REDUCE_UINT32(counter[0x0], counter[0x1]);
+        counter[0x1] = REDUCE_UINT32(counter[0x2], counter[0x3]);
+
+        counter[0x0] = REDUCE_UINT32(counter[0x0], counter[0x1]);
+
+        flagsv = _mm512_add_epi32(flagsv, _mm512_slli_epi32(counter[0x0], 4));
+#endif
     }
+
+    _mm512_storeu_si512((__m512*)flags, flagsv);
 
     _mm512_storeu_si512((__m512i*)buffer, v1);
     for (size_t i = 0; i < 32; i++) {
