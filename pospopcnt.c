@@ -40,7 +40,7 @@ int pospopcnt_u16(const uint16_t* data, uint32_t len, uint32_t* flags) {
     return(pospopcnt_u16_sse_harvey_seal(data, len, flags));
 #else
     #ifndef _MSC_VER
-        return(pospopcnt_u16_scalar_umul128_unroll2(data, len, flags)); // fallback scalar
+        return(pospopcnt_u16_scalar_umul128_unroll3(data, len, flags)); // fallback scalar
     #else
         return(pospopcnt_u16_scalar_naive(data, len, flags));
     #endif
@@ -55,7 +55,7 @@ int pospopcnt_u16_method(PPOPCNT_U16_METHODS method, const uint16_t* data, uint3
     case(PPOPCNT_SCALAR_PARTITION): return pospopcnt_u16_scalar_partition(data, len, flags);
     case(PPOPCNT_SCALAR_HIST1X4): return pospopcnt_u16_scalar_hist1x4(data, len, flags);
     case(PPOPCNT_SCALAR_UMUL128): return pospopcnt_u16_scalar_umul128(data, len, flags);
-    case(PPOPCNT_SCALAR_UMUL128_UR2): return pospopcnt_u16_scalar_umul128_unroll2(data, len, flags);
+    case(PPOPCNT_SCALAR_UMUL128_UR3): return pospopcnt_u16_scalar_umul128_unroll3(data, len, flags);
     case(PPOPCNT_SSE_SINGLE): return pospopcnt_u16_sse_single(data, len, flags);
     case(PPOPCNT_SSE_BLEND_POPCNT): return pospopcnt_u16_sse_blend_popcnt(data, len, flags);
     case(PPOPCNT_SSE_BLEND_POPCNT_UR4): return pospopcnt_u16_sse_blend_popcnt_unroll4(data, len, flags);
@@ -100,7 +100,7 @@ pospopcnt_u16_method_type get_pospopcnt_u16_method(PPOPCNT_U16_METHODS method) {
     case(PPOPCNT_SCALAR_PARTITION): return pospopcnt_u16_scalar_partition;
     case(PPOPCNT_SCALAR_HIST1X4): return pospopcnt_u16_scalar_hist1x4;
     case(PPOPCNT_SCALAR_UMUL128): return pospopcnt_u16_scalar_umul128;
-    case(PPOPCNT_SCALAR_UMUL128_UR2): return pospopcnt_u16_scalar_umul128_unroll2;
+    case(PPOPCNT_SCALAR_UMUL128_UR3): return pospopcnt_u16_scalar_umul128_unroll3;
     case(PPOPCNT_SSE_SINGLE): return pospopcnt_u16_sse_single;
     case(PPOPCNT_SSE_BLEND_POPCNT): return pospopcnt_u16_sse_blend_popcnt;
     case(PPOPCNT_SSE_BLEND_POPCNT_UR4): return pospopcnt_u16_sse_blend_popcnt_unroll4;
@@ -793,17 +793,19 @@ int pospopcnt_u16_scalar_umul128(const uint16_t* in, uint32_t n, uint32_t* out) 
     return 0;
 }
 
-int pospopcnt_u16_scalar_umul128_unroll2(const uint16_t* in, uint32_t n, uint32_t* out) {
-    while (n >= 8) {
+int pospopcnt_u16_scalar_umul128_unroll3(const uint16_t* in, uint32_t n, uint32_t* out) {
+    memset(out, 0, 16*sizeof(uint32_t));
+
+    while (n >= 12) {
         uint64_t counter_a = 0; // 4 packed 12-bit counters
         uint64_t counter_b = 0;
         uint64_t counter_c = 0;
         uint64_t counter_d = 0;
 
         // end before overflowing the counters
-        uint32_t len = ((n < 0x0FFF) ? n : 0x0FFF) & ~7;
+        uint32_t len = ((n < 0xFFC) ? n - (n % 12) : 0xFFC);
         n -= len;
-        for (const uint16_t* end = &in[len]; in != end; in += 8) {
+        for (const uint16_t* end = &in[len]; in != end; in += 12) {
             const uint64_t mask_a = UINT64_C(0x1111111111111111);
             const uint64_t mask_b = mask_a + mask_a;
             const uint64_t mask_c = mask_b + mask_b;
@@ -812,11 +814,12 @@ int pospopcnt_u16_scalar_umul128_unroll2(const uint16_t* in, uint32_t n, uint32_
 
             uint64_t v0 = pospopcnt_loadu_u64(&in[0]);
             uint64_t v1 = pospopcnt_loadu_u64(&in[4]);
+            uint64_t v2 = pospopcnt_loadu_u64(&in[8]);
 
-            uint64_t a = (v0 & mask_a) + (v1 & mask_a);
-            uint64_t b = ((v0 & mask_b) + (v1 & mask_b)) >> 1;
-            uint64_t c = ((v0 & mask_c) + (v1 & mask_c)) >> 2;
-            uint64_t d = ((v0 >> 3) & mask_a) + ((v1 >> 3) & mask_a);
+            uint64_t a = (v0 & mask_a) + (v1 & mask_a) + (v2 & mask_a);
+            uint64_t b = ((v0 & mask_b) + (v1 & mask_b) + (v2 & mask_b)) >> 1;
+            uint64_t c = ((v0 & mask_c) + (v1 & mask_c) + (v2 & mask_c)) >> 2;
+            uint64_t d = ((v0 >> 3) & mask_a) + ((v1 >> 3) & mask_a) + ((v2 >> 3) & mask_a);
 
             uint64_t hi;
             a = pospopcnt_umul128(a, mask_0001, &hi);
@@ -852,15 +855,15 @@ int pospopcnt_u16_scalar_umul128_unroll2(const uint16_t* in, uint32_t n, uint32_
         out[15] += (counter_d >> 12) & 0x0FFF;
     }
 
-    // assert(n < 8)
+    // assert(n < 12)
     if (n != 0) {
         uint64_t tail_counter_a = 0;
         uint64_t tail_counter_b = 0;
-        do { // zero-extend a bit to 8-bits (emulate pdep) then accumulate
+        do { // zero-extend each bit to 8-bits (emulate pdep) then accumulate
             const uint64_t mask_01 = UINT64_C(0x0101010101010101);
             const uint64_t magic   = UINT64_C(0x0000040010004001); // 1+(1<<14)+(1<<28)+(1<<42)
             uint64_t x = *in++;
-            tail_counter_a += ((x & 0x5555) * magic) & mask_01; // 0101010101010101
+            tail_counter_a += ((x & 0x5555) * magic) & mask_01;
             tail_counter_b += (((x >> 1) & 0x5555) * magic) & mask_01;
         } while (--n);
 
@@ -886,7 +889,7 @@ int pospopcnt_u16_scalar_umul128_unroll2(const uint16_t* in, uint32_t n, uint32_
 }
 #else 
 int pospopcnt_u16_scalar_umul128(const uint16_t* in, uint32_t n, uint32_t* out) { return(0); }
-int pospopcnt_u16_scalar_umul128_unroll2(const uint16_t* in, uint32_t n, uint32_t* out) { return(0); }
+int pospopcnt_u16_scalar_umul128_unroll3(const uint16_t* in, uint32_t n, uint32_t* out) { return(0); }
 #endif
 
 #if POSPOPCNT_SIMD_VERSION >= 6

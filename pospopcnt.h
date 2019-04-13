@@ -242,7 +242,7 @@ typedef enum {
     PPOPCNT_SCALAR_PARTITION,
     PPOPCNT_SCALAR_HIST1X4,
     PPOPCNT_SCALAR_UMUL128, 
-    PPOPCNT_SCALAR_UMUL128_UR2,
+    PPOPCNT_SCALAR_UMUL128_UR3,
     PPOPCNT_SSE_SINGLE,
     PPOPCNT_SSE_BLEND_POPCNT,
     PPOPCNT_SSE_BLEND_POPCNT_UR4,
@@ -283,7 +283,7 @@ static const char * const pospopcnt_u16_method_names[] = {
     "pospopcnt_u16_scalar_partition",
     "pospopcnt_u16_scalar_hist1x4",
     "pospopcnt_u16_scalar_umul128",
-    "pospopcnt_u16_scalar_umul128_unroll2",
+    "pospopcnt_u16_scalar_umul128_unroll3",
     "pospopcnt_u16_sse_single",
     "pospopcnt_u16_sse_blend_popcnt",
     "pospopcnt_u16_sse_blend_popcnt_unroll4",
@@ -385,7 +385,7 @@ int pospopcnt_u16_scalar_naive_nosimd(const uint16_t* data, uint32_t len, uint32
 int pospopcnt_u16_scalar_partition(const uint16_t* data, uint32_t len, uint32_t* flags);
 int pospopcnt_u16_scalar_hist1x4(const uint16_t* data, uint32_t len, uint32_t* flags);
 int pospopcnt_u16_scalar_umul128(const uint16_t* data, uint32_t len, uint32_t* flags);
-int pospopcnt_u16_scalar_umul128_unroll2(const uint16_t* data, uint32_t len, uint32_t* flags);
+int pospopcnt_u16_scalar_umul128_unroll3(const uint16_t* data, uint32_t len, uint32_t* flags);
 int pospopcnt_u16_sse_single(const uint16_t* data, uint32_t len, uint32_t* flags);
 int pospopcnt_u16_sse_blend_popcnt(const uint16_t* data, uint32_t len, uint32_t* flags);
 int pospopcnt_u16_sse_blend_popcnt_unroll4(const uint16_t* data, uint32_t len, uint32_t* flags);
