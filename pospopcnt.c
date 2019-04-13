@@ -735,6 +735,8 @@ int pospopcnt_u16_scalar_umul128(const uint16_t* in, uint32_t n, uint32_t* out) 
     const uint64_t mask_cnts = UINT64_C(0x003801C00E007007); // 00000000 00111000 00000001 11000000 00001110 00000000 01110000 00001000
     const uint64_t mask_0001 = UINT64_C(0x0001000100010001); // 00000000 00000001 00000000 00000001 00000000 00000001 00000000 00000001
 
+    memset(out, 0, 16*sizeof(uint32_t));
+
     while (n >= 4) {
         uint64_t counter_a = 0; // 5 packed 12-bit counters (4 unused bits).
         uint64_t counter_b = 0;
