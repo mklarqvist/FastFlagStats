@@ -448,196 +448,141 @@ int pospopcnt_u16_sse_single(const uint16_t* data, uint32_t len, uint32_t* flags
 
 // By @aqrit (https://github.com/aqrit)
 // @see: https://gist.github.com/aqrit/cb52b2ac5b7d0dfe9319c09d27237bf3
-int pospopcnt_u16_sse_sad(const uint16_t* data, uint32_t len, uint32_t* flag_counts) {
+int pospopcnt_u16_sse_sad(const uint16_t* in, uint32_t n, uint32_t* out) {
     const __m128i zero = _mm_setzero_si128();
-    const __m128i mask_lo_byte = _mm_srli_epi16(_mm_cmpeq_epi8(zero, zero), 8);
-    const __m128i mask_lo_cnt  = _mm_srli_epi16(mask_lo_byte, 2);
-    const __m128i mask_bits_a  = _mm_set1_epi8(0x41); // 01000001
-    const __m128i mask_bits_b  = _mm_add_epi8(mask_bits_a, mask_bits_a);
-    uint32_t buffer[16];
+    const __m128i neg1 = _mm_cmpeq_epi8(zero, zero);
+    const __m128i mask_byte = _mm_srli_epi16(neg1, 8);
+    const __m128i mask_cnt  = _mm_set1_epi8(0x03);
+    const __m128i mask_bits  = _mm_set1_epi8(0x55);
 
     __m128i counterA = zero;
     __m128i counterB = zero;
     __m128i counterC = zero;
     __m128i counterD = zero;
 
-    for (const uint16_t* end = &data[(len & ~31)]; data != end; data += 32) {
-        __m128i r0 = _mm_loadu_si128((__m128i*)&data[0]);
-        __m128i r1 = _mm_loadu_si128((__m128i*)&data[8]);
-        __m128i r2 = _mm_loadu_si128((__m128i*)&data[16]);
-        __m128i r3 = _mm_loadu_si128((__m128i*)&data[24]);
-        __m128i r4, r5, r6, r7;
+    uint32_t tail = 0;
+    uint32_t body = 0;
+    if (n != 0) {
+        tail = n % 24;
+        body = n - tail;
+    }
 
-        // seperate LOBYTE and HIBYTE of each WORD
+    for (const uint16_t* end = &in[body]; in != end; in += 24) {
+        __m128i r0 = _mm_loadu_si128((__m128i*)&in[0]);
+        __m128i r1 = _mm_loadu_si128((__m128i*)&in[8]);
+        __m128i r2 = _mm_loadu_si128((__m128i*)&in[16]);
+        __m128i r3, r4, r5, r6;
+
+        // split apart words into high and low byte groups
         // (emulate PSHUFB F,D,B,9,7,5,3,1, E,C,A,8,6,4,2,0)
-        r4 = _mm_and_si128(mask_lo_byte, r0);
-        r5 = _mm_and_si128(mask_lo_byte, r1);
-        r6 = _mm_and_si128(mask_lo_byte, r2);
-        r7 = _mm_and_si128(mask_lo_byte, r3);
+        r3 = _mm_and_si128(mask_byte, r0);
+        r4 = _mm_and_si128(mask_byte, r1);
+        r5 = _mm_and_si128(mask_byte, r2);
         r0 = _mm_srli_epi16(r0, 8);
         r1 = _mm_srli_epi16(r1, 8);
         r2 = _mm_srli_epi16(r2, 8);
-        r3 = _mm_srli_epi16(r3, 8);
-        r0 = _mm_packus_epi16(r0, r4);
-        r1 = _mm_packus_epi16(r1, r5);
-        r2 = _mm_packus_epi16(r2, r6);
-        r3 = _mm_packus_epi16(r3, r7);
+        r0 = _mm_packus_epi16(r0, r3);
+        r1 = _mm_packus_epi16(r1, r4);
+        r2 = _mm_packus_epi16(r2, r5);
 
-        // isolate bits to count
-        r4 = _mm_and_si128(mask_bits_a, r0);
-        r5 = _mm_and_si128(mask_bits_a, r1);
-        r6 = _mm_and_si128(mask_bits_a, r2);
-        r7 = _mm_and_si128(mask_bits_a, r3);
+        // add up bits into 2-bit counters
+        r3 = _mm_and_si128(mask_bits, r0);
+        r4 = _mm_and_si128(mask_bits, r1);
+        r5 = _mm_and_si128(mask_bits, r2);
+        r3 = _mm_add_epi16(r3, r4);
+        r3 = _mm_add_epi16(r3, r5);
 
-        // horizontal sum of qwords
+        // shift right 1 (backfill with 1)
+        r0 = _mm_avg_epu8(r0, neg1);
+        r1 = _mm_avg_epu8(r1, neg1);
+        r2 = _mm_avg_epu8(r2, neg1);
+
+        // split apart 2-bit counters and hsum
+        r4 = _mm_and_si128(mask_cnt, r3);
         r4 = _mm_sad_epu8(r4, zero);
+        r3 = _mm_srli_epi16(r3, 2);
+        r5 = _mm_and_si128(mask_cnt, r3);
         r5 = _mm_sad_epu8(r5, zero);
+        r3 = _mm_srli_epi16(r3, 2);
+        r6 = _mm_and_si128(mask_cnt, r3);
         r6 = _mm_sad_epu8(r6, zero);
-        r7 = _mm_sad_epu8(r7, zero);
-
-        // sum 6-bit counts
-        r4 = _mm_add_epi16(r4,r5);
-        r4 = _mm_add_epi16(r4,r6);
-        r4 = _mm_add_epi16(r4,r7);
-
-        // unpack 6-bit counts to 32-bits
-        r5 = _mm_and_si128(mask_lo_cnt, r4);
-        r4 = _mm_srli_epi16(r4, 6);
-        r4 = _mm_packs_epi32(r4, r5);
-
-        // accumulate
-        counterA = _mm_add_epi32(counterA, r4);
-
-        // do it again...
-        r4 = _mm_and_si128(mask_bits_b, r0);
-        r5 = _mm_and_si128(mask_bits_b, r1);
-        r6 = _mm_and_si128(mask_bits_b, r2);
-        r7 = _mm_and_si128(mask_bits_b, r3);
-
-        r4 = _mm_sad_epu8(r4, zero);
-        r5 = _mm_sad_epu8(r5, zero);
-        r6 = _mm_sad_epu8(r6, zero);
-        r7 = _mm_sad_epu8(r7, zero);
-
-        r4 = _mm_add_epi16(r4,r5);
-        r4 = _mm_add_epi16(r4,r6);
-        r4 = _mm_add_epi16(r4,r7);
-
-        r5 = _mm_avg_epu8(zero, r4); // shift right 1
-        r5 = _mm_and_si128(r5, mask_lo_cnt);
-        r4 = _mm_srli_epi16(r4, 7);
-        r4 = _mm_packs_epi32(r4, r5);
-
-        counterB = _mm_add_epi32(counterB, r4); // accumulate
-
-        // rotate right 4
-        r4 = _mm_slli_epi16(r0, 12);
-        r5 = _mm_slli_epi16(r1, 12);
-        r6 = _mm_slli_epi16(r2, 12);
-        r7 = _mm_slli_epi16(r3, 12);
-        r0 = _mm_srli_epi16(r0, 4);
-        r1 = _mm_srli_epi16(r1, 4);
-        r2 = _mm_srli_epi16(r2, 4);
-        r3 = _mm_srli_epi16(r3, 4);
-        r0 = _mm_or_si128(r0, r4);
-        r1 = _mm_or_si128(r1, r5);
-        r2 = _mm_or_si128(r2, r6);
-        r3 = _mm_or_si128(r3, r7);
-
-        // do it again...
-        r4 = _mm_and_si128(mask_bits_a, r0);
-        r5 = _mm_and_si128(mask_bits_a, r1);
-        r6 = _mm_and_si128(mask_bits_a, r2);
-        r7 = _mm_and_si128(mask_bits_a, r3);
-
-        r4 = _mm_sad_epu8(r4, zero);
-        r5 = _mm_sad_epu8(r5, zero);
-        r6 = _mm_sad_epu8(r6, zero);
-        r7 = _mm_sad_epu8(r7, zero);
-
-        r4 = _mm_add_epi16(r4,r5);
-        r4 = _mm_add_epi16(r4,r6);
-        r4 = _mm_add_epi16(r4,r7);
-
-        r5 = _mm_and_si128(mask_lo_cnt, r4);
-        r4 = _mm_srli_epi16(r4, 6);
-        r4 = _mm_packs_epi32(r4, r5);
-
-        counterC = _mm_add_epi32(counterC, r4); // accumulate
-
-        // do it again...
-        r0 = _mm_and_si128(r0, mask_bits_b);
-        r1 = _mm_and_si128(r1, mask_bits_b);
-        r2 = _mm_and_si128(r2, mask_bits_b);
-        r3 = _mm_and_si128(r3, mask_bits_b);
-
-        r0 = _mm_sad_epu8(r0, zero);
-        r1 = _mm_sad_epu8(r1, zero);
-        r2 = _mm_sad_epu8(r2, zero);
+        r3 = _mm_srli_epi16(r3, 2);
+        r3 = _mm_and_si128(r3, mask_cnt);
         r3 = _mm_sad_epu8(r3, zero);
 
-        r0 = _mm_add_epi16(r0,r1);
-        r0 = _mm_add_epi16(r0,r2);
-        r0 = _mm_add_epi16(r0,r3);
+        r0 = _mm_and_si128(r0, mask_bits);
+        r1 = _mm_and_si128(r1, mask_bits);
+        r2 = _mm_and_si128(r2, mask_bits);
+        r0 = _mm_add_epi16(r0, r1);
+        r0 = _mm_add_epi16(r0, r2);
 
-        r1 = _mm_avg_epu8(zero, r0);
-        r1 = _mm_and_si128(r1, mask_lo_cnt);
-        r0 = _mm_srli_epi16(r0, 7);
-        r0 = _mm_packs_epi32(r0, r1);
+        r4 = _mm_packs_epi32(r4, r5);
+        r6 = _mm_packs_epi32(r6, r3);
+        counterA = _mm_add_epi32(counterA, r4);
+        counterB = _mm_add_epi32(counterB, r6);
 
-        counterD = _mm_add_epi32(counterD, r0); // accumulate
+        r1 = _mm_and_si128(mask_cnt, r0);
+        r1 = _mm_sad_epu8(r1, zero);
+        r0 = _mm_srli_epi16(r0, 2);
+        r2 = _mm_and_si128(mask_cnt, r0);
+        r2 = _mm_sad_epu8(r2, zero);
+        r0 = _mm_srli_epi16(r0, 2);
+        r5 = _mm_and_si128(mask_cnt, r0);
+        r5 = _mm_sad_epu8(r5, zero);
+        r0 = _mm_srli_epi16(r0, 2);
+        r0 = _mm_and_si128(r0, mask_cnt);
+        r0 = _mm_sad_epu8(r0, zero);
+
+        r1 = _mm_packs_epi32(r1, r2);
+        r5 = _mm_packs_epi32(r5, r0);
+        counterC = _mm_add_epi32(counterC, r1);
+        counterD = _mm_add_epi32(counterD, r5);
     }
 
     // transpose then store counters
-    __m128i counter_1098 = _mm_unpackhi_epi32(counterA, counterB);
-    __m128i counter_76FE = _mm_unpacklo_epi32(counterA, counterB);
-    __m128i counter_32BA = _mm_unpacklo_epi32(counterC, counterD);
-    __m128i counter_54DC = _mm_unpackhi_epi32(counterC, counterD);
-    __m128i counter_7654 = _mm_unpackhi_epi64(counter_54DC, counter_76FE);
-    __m128i counter_FEDC = _mm_unpacklo_epi64(counter_54DC, counter_76FE);
+    __m128i counter_1098 = _mm_unpacklo_epi32(counterA, counterC);
+    __m128i counter_32BA = _mm_unpackhi_epi32(counterA, counterC);
+    __m128i counter_54DC = _mm_unpacklo_epi32(counterB, counterD);
+    __m128i counter_76FE = _mm_unpackhi_epi32(counterB, counterD);
     __m128i counter_3210 = _mm_unpackhi_epi64(counter_1098, counter_32BA);
+    __m128i counter_7654 = _mm_unpackhi_epi64(counter_54DC, counter_76FE);
     __m128i counter_BA98 = _mm_unpacklo_epi64(counter_1098, counter_32BA);
-
-    
-    _mm_storeu_si128((__m128i*)&buffer[0], counter_3210);
-    _mm_storeu_si128((__m128i*)&buffer[4], counter_7654);
-    _mm_storeu_si128((__m128i*)&buffer[8], counter_BA98);
-    _mm_storeu_si128((__m128i*)&buffer[12], counter_FEDC);
-    for (int i = 0; i < 16; ++i) flag_counts[i] += buffer[i];
+    __m128i counter_FEDC = _mm_unpacklo_epi64(counter_54DC, counter_76FE);
+    _mm_storeu_si128((__m128i*)&out[0], counter_3210);
+    _mm_storeu_si128((__m128i*)&out[4], counter_7654);
+    _mm_storeu_si128((__m128i*)&out[8], counter_BA98);
+    _mm_storeu_si128((__m128i*)&out[12], counter_FEDC);
 
     // scalar tail loop
-    int tail = len & 31;
     if (tail != 0) {
         uint64_t countsA = 0;
         uint64_t countsB = 0;
         do {
-            // zero-extend a bit to 8-bits then accumulate
-            // (emulate pdep)
-            const uint64_t mask_01 = UINT64_C(0x0101010101010101);// 100000001000000010000000100000001000000010000000100000001
-            const uint64_t magic   = UINT64_C(0x0000040010004001);// 000000000000001000000000000010000000000000100000000000001
-                                                                  // 1+(1<<14)+(1<<28)+(1<<42)
-            uint64_t x = *data++;
-            countsA += ((x & 0x5555) * magic) & mask_01; // 0101010101010101
+            // zero-extend each bit to 8-bits then accumulate
+            const uint64_t mask_01 = UINT64_C(0x0101010101010101);
+            const uint64_t magic   = UINT64_C(0x0000040010004001);// 1+(1<<14)+(1<<28)+(1<<42)
+            uint64_t x = *in++;
+            countsA += ((x & 0x5555) * magic) & mask_01;
             countsB += (((x >> 1) & 0x5555) * magic) & mask_01;
         } while (--tail);
 
         // transpose then store counters
-        flag_counts[0]  += countsA & 0xFF;
-        flag_counts[8]  += (countsA >>  8) & 0xFF;
-        flag_counts[2]  += (countsA >> 16) & 0xFF;
-        flag_counts[10] += (countsA >> 24) & 0xFF;
-        flag_counts[4]  += (countsA >> 32) & 0xFF;
-        flag_counts[12] += (countsA >> 40) & 0xFF;
-        flag_counts[6]  += (countsA >> 48) & 0xFF;
-        flag_counts[14] += (countsA >> 56) & 0xFF;
-        flag_counts[1]  += countsB & 0xFF;
-        flag_counts[9]  += (countsB >>  8) & 0xFF;
-        flag_counts[3]  += (countsB >> 16) & 0xFF;
-        flag_counts[11] += (countsB >> 24) & 0xFF;
-        flag_counts[5]  += (countsB >> 32) & 0xFF;
-        flag_counts[13] += (countsB >> 40) & 0xFF;
-        flag_counts[7]  += (countsB >> 48) & 0xFF;
-        flag_counts[15] += (countsB >> 56) & 0xFF;
+        out[0]  += countsA & 0xFF;
+        out[8]  += (countsA >>  8) & 0xFF;
+        out[2]  += (countsA >> 16) & 0xFF;
+        out[10] += (countsA >> 24) & 0xFF;
+        out[4]  += (countsA >> 32) & 0xFF;
+        out[12] += (countsA >> 40) & 0xFF;
+        out[6]  += (countsA >> 48) & 0xFF;
+        out[14] += (countsA >> 56) & 0xFF;
+        out[1]  += countsB & 0xFF;
+        out[9]  += (countsB >>  8) & 0xFF;
+        out[3]  += (countsB >> 16) & 0xFF;
+        out[11] += (countsB >> 24) & 0xFF;
+        out[5]  += (countsB >> 32) & 0xFF;
+        out[13] += (countsB >> 40) & 0xFF;
+        out[7]  += (countsB >> 48) & 0xFF;
+        out[15] += (countsB >> 56) & 0xFF;
     }
 
     return 0;
